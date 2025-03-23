@@ -16,6 +16,7 @@
 #pragma kernel CSScaleSelection
 #pragma kernel CSExportData
 #pragma kernel CSCopySplats
+#pragma kernel CSDepthCopy
 
 // DeviceRadixSort
 #pragma multi_compile __ KEY_UINT KEY_INT KEY_FLOAT
@@ -28,10 +29,14 @@
 #pragma kernel Scan
 #pragma kernel Downsweep
 
+
 // GPU sorting needs wave ops
 #pragma require wavebasic
 #pragma require waveballot
 #pragma use_dxc
+
+//#define UNITY_STEREO_INSTANCING_ENABLED
+#pragma shader_feature UNITY_STEREO_INSTANCING_ENABLED
 
 #include "DeviceRadixSort.hlsl"
 #include "GaussianSplatting.hlsl"
@@ -48,6 +53,11 @@ RWStructuredBuffer<uint> _SplatSortDistances;
 RWStructuredBuffer<uint> _SplatSortKeys;
 uint _SplatCount;
 
+uint _ViewCount;
+StructuredBuffer<float4x4> _MatrixStereoView;
+StructuredBuffer<float4x4> _MatrixStereoProj;
+RWStructuredBuffer<uint> _DebugBuffer; // Buffer to store error flags
+
 // radix sort etc. friendly, see http://stereopsis.com/radix.html
 uint FloatToSortableUint(float f)
 {
@@ -57,7 +67,7 @@ uint FloatToSortableUint(float f)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSSetIndices (uint3 id : SV_DispatchThreadID)
+void CSSetIndices(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
@@ -67,21 +77,23 @@ void CSSetIndices (uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSCalcDistances (uint3 id : SV_DispatchThreadID)
+void CSCalcDistances(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
         return;
 
     uint origIdx = _SplatSortKeys[idx];
-
+    
     float3 pos = LoadSplatPos(origIdx);
+    
     pos = mul(_MatrixMV, float4(pos.xyz, 1)).xyz;
 
     _SplatSortDistances[idx] = FloatToSortableUint(pos.z);
 }
 
-RWStructuredBuffer<SplatViewData> _SplatViewData;
+RWStructuredBuffer<SplatViewData> _SplatViewDataL;
+RWStructuredBuffer<SplatViewData> _SplatViewDataR;
 
 float _SplatScale;
 float _SplatOpacityScale;
@@ -98,6 +110,7 @@ struct GaussianCutoutShaderData // match GaussianCutout.ShaderData in C#
     float4x4 mat;
     uint typeAndFlags;
 };
+
 StructuredBuffer<GaussianCutoutShaderData> _SplatCutouts;
 
 RWByteAddressBuffer _SplatSelectedBits;
@@ -187,70 +200,111 @@ bool IsSplatCut(float3 pos)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSCalcViewData (uint3 id : SV_DispatchThreadID)
+void CSCalcViewData(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
         return;
+    #ifdef UNITY_STEREO_INSTANCING_ENABLED
+    uint splatIndex = idx;
 
-    SplatData splat = LoadSplatData(idx);
-    SplatViewData view = (SplatViewData)0;
-    
-    float3 centerWorldPos = mul(_MatrixObjectToWorld, float4(splat.pos,1)).xyz;
-    float4 centerClipPos = mul(UNITY_MATRIX_VP, float4(centerWorldPos, 1));
-    half opacityScale = _SplatOpacityScale;
-    float splatScale = _SplatScale;
-
-    // deleted?
-    if (_SplatBitsValid)
+    for (uint i = 0; i < _ViewCount; i++)
     {
-        uint wordIdx = idx / 32;
-        uint bitIdx = idx & 31;
-        uint wordVal = _SplatDeletedBits.Load(wordIdx * 4);
-        if (wordVal & (1 << bitIdx))
+        uint viewIndex = i;
+        SplatData splat = LoadSplatData(splatIndex);
+        SplatViewData view = (SplatViewData)0;
+
+        float3 centerWorldPos = mul(_MatrixObjectToWorld, float4(splat.pos, 1)).xyz;
+        float4 centerClipPos = mul(_MatrixStereoProj[viewIndex],
+                                   mul(_MatrixStereoView[viewIndex], float4(centerWorldPos, 1)));
+
+        half opacityScale = _SplatOpacityScale;
+        float splatScale = _SplatScale;
+
+        // deleted?
+        if (_SplatBitsValid)
+        {
+            uint wordIdx = idx / 32;
+            uint bitIdx = idx & 31;
+            uint wordVal = _SplatDeletedBits.Load(wordIdx * 4);
+            if (wordVal & (1 << bitIdx))
+            {
+                centerClipPos.w = 0;
+            }
+        }
+
+        // cutouts
+        if (IsSplatCut(splat.pos))
         {
             centerClipPos.w = 0;
         }
+
+        view.pos = centerClipPos;
+        bool behindCam = centerClipPos.w <= 0;
+
+        if (!behindCam)
+        {
+            float4 boxRot = splat.rot;
+            float3 boxSize = splat.scale;
+
+            float3x3 splatRotScaleMat = CalcMatrixFromRotationScale(boxRot, boxSize);
+
+            float3 cov3d0, cov3d1;
+            CalcCovariance3D(splatRotScaleMat, cov3d0, cov3d1);
+            float splatScale2 = splatScale * splatScale;
+            cov3d0 *= splatScale2;
+            cov3d1 *= splatScale2;
+
+            // Calculate view-specific covariance
+            float3 cov2d = CalcCovariance2D(splat.pos, cov3d0, cov3d1, _MatrixStereoView[viewIndex],
+                                            _MatrixStereoProj[viewIndex], _VecScreenParams);
+
+            DecomposeCovariance(cov2d, view.axis1, view.axis2);
+
+            float3 worldViewDir = _VecWorldSpaceCameraPos.xyz - centerWorldPos;
+            float3 objViewDir = mul((float3x3)_MatrixWorldToObject, worldViewDir);
+            objViewDir = normalize(objViewDir);
+
+            half4 col;
+            col.rgb = ShadeSH(splat.sh, objViewDir, _SHOrder, _SHOnly != 0);
+            col.a = min(splat.opacity * opacityScale, 65000);
+            view.color.x = (f32tof16(col.r) << 16) | f32tof16(col.g);
+            view.color.y = (f32tof16(col.b) << 16) | f32tof16(col.a);
+
+            if (id.x == 0)
+            {
+                _DebugBuffer[0] = view.pos.x;
+                _DebugBuffer[1] = view.pos.y;
+                _DebugBuffer[2] = view.pos.z;
+                _DebugBuffer[5] = view.color.x;
+                _DebugBuffer[6] = view.color.y;
+                // _DebugBuffer[0] = 1;
+                // _DebugBuffer[1] = 2;
+                // _DebugBuffer[2] = 3;
+            }
+        }
+        if (i == 0)
+        {
+            _SplatViewDataL[idx] = view;
+        }
+        else if (i == 1)
+        {
+            _SplatViewDataR[idx] = view;
+        }
     }
 
-    // cutouts
-    if (IsSplatCut(splat.pos))
-    {
-        centerClipPos.w = 0;
-    }
-
-    view.pos = centerClipPos;
-    bool behindCam = centerClipPos.w <= 0;
-    if (!behindCam)
-    {
-        float4 boxRot = splat.rot;
-        float3 boxSize = splat.scale;
-
-        float3x3 splatRotScaleMat = CalcMatrixFromRotationScale(boxRot, boxSize);
-
-        float3 cov3d0, cov3d1;
-        CalcCovariance3D(splatRotScaleMat, cov3d0, cov3d1);
-        float splatScale2 = splatScale * splatScale;
-        cov3d0 *= splatScale2;
-        cov3d1 *= splatScale2;
-        float3 cov2d = CalcCovariance2D(splat.pos, cov3d0, cov3d1, _MatrixMV, UNITY_MATRIX_P, _VecScreenParams);
-        
-        DecomposeCovariance(cov2d, view.axis1, view.axis2);
-
-        float3 worldViewDir = _VecWorldSpaceCameraPos.xyz - centerWorldPos;
-        float3 objViewDir = mul((float3x3)_MatrixWorldToObject, worldViewDir);
-        objViewDir = normalize(objViewDir);
-
-        half4 col;
-        col.rgb = ShadeSH(splat.sh, objViewDir, _SHOrder, _SHOnly != 0);
-        col.a = min(splat.opacity * opacityScale, 65000);
-        view.color.x = (f32tof16(col.r) << 16) | f32tof16(col.g);
-        view.color.y = (f32tof16(col.b) << 16) | f32tof16(col.a);
-    }
-    
-    _SplatViewData[idx] = view;
+    #endif
 }
 
+Texture2DArray<float> SrcDepth;
+RWTexture2DArray<float> DstDepth;
+
+[numthreads(8, 8, 1)]
+void CSDepthCopy(uint3 id : SV_DispatchThreadID)
+{
+    float depth = SrcDepth[id.xyz];
+    DstDepth[id.xyz] = depth;
+}
 
 RWByteAddressBuffer _DstBuffer;
 ByteAddressBuffer _SrcBuffer;
@@ -264,7 +318,7 @@ uint2 GetSplatIndicesFromWord(uint idx)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSUpdateEditData (uint3 id : SV_DispatchThreadID)
+void CSUpdateEditData(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _BufferSize)
@@ -315,9 +369,9 @@ void CSUpdateEditData (uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(1,1,1)]
-void CSInitEditData (uint3 id : SV_DispatchThreadID)
+void CSInitEditData(uint3 id : SV_DispatchThreadID)
 {
-    _DstBuffer.Store3(0, uint3(0,0,0)); // selected, deleted, cut counts
+    _DstBuffer.Store3(0, uint3(0, 0, 0)); // selected, deleted, cut counts
     uint initMin = FloatToSortableUint(1.0e38);
     uint initMax = FloatToSortableUint(-1.0e38);
     _DstBuffer.Store3(12, uint3(initMin, initMin, initMin));
@@ -325,7 +379,7 @@ void CSInitEditData (uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSClearBuffer (uint3 id : SV_DispatchThreadID)
+void CSClearBuffer(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _BufferSize)
@@ -334,7 +388,7 @@ void CSClearBuffer (uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSInvertSelection (uint3 id : SV_DispatchThreadID)
+void CSInvertSelection(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _BufferSize)
@@ -356,7 +410,7 @@ void CSInvertSelection (uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSSelectAll (uint3 id : SV_DispatchThreadID)
+void CSSelectAll(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _BufferSize)
@@ -378,7 +432,7 @@ void CSSelectAll (uint3 id : SV_DispatchThreadID)
 
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSOrBuffers (uint3 id : SV_DispatchThreadID)
+void CSOrBuffers(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _BufferSize)
@@ -391,7 +445,7 @@ void CSOrBuffers (uint3 id : SV_DispatchThreadID)
 float4 _SelectionRect;
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSSelectionUpdate (uint3 id : SV_DispatchThreadID)
+void CSSelectionUpdate(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
@@ -401,7 +455,7 @@ void CSSelectionUpdate (uint3 id : SV_DispatchThreadID)
     if (IsSplatCut(pos))
         return;
 
-    float3 centerWorldPos = mul(_MatrixObjectToWorld, float4(pos,1)).xyz;
+    float3 centerWorldPos = mul(_MatrixObjectToWorld, float4(pos, 1)).xyz;
     float4 centerClipPos = mul(UNITY_MATRIX_VP, float4(centerWorldPos, 1));
     bool behindCam = centerClipPos.w <= 0;
     if (behindCam)
@@ -432,7 +486,7 @@ bool IsSplatSelected(uint idx)
 }
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSTranslateSelection (uint3 id : SV_DispatchThreadID)
+void CSTranslateSelection(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
@@ -456,7 +510,7 @@ ByteAddressBuffer _SplatPosMouseDown;
 ByteAddressBuffer _SplatOtherMouseDown;
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSRotateSelection (uint3 id : SV_DispatchThreadID)
+void CSRotateSelection(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
@@ -470,9 +524,9 @@ void CSRotateSelection (uint3 id : SV_DispatchThreadID)
         uint posStride = 12;
         float3 pos = asfloat(_SplatPosMouseDown.Load3(idx * posStride));
         pos -= _SelectionCenter;
-        pos = mul(_MatrixObjectToWorld, float4(pos,1)).xyz;
+        pos = mul(_MatrixObjectToWorld, float4(pos, 1)).xyz;
         pos = QuatRotateVector(pos, _SelectionDeltaRot);
-        pos = mul(_MatrixWorldToObject, float4(pos,1)).xyz;
+        pos = mul(_MatrixWorldToObject, float4(pos, 1)).xyz;
         pos += _SelectionCenter;
         _SplatPos.Store3(idx * posStride, asuint(pos));
     }
@@ -497,7 +551,7 @@ void CSRotateSelection (uint3 id : SV_DispatchThreadID)
 
 //@TODO: maybe scale the splat scale itself too?
 [numthreads(GROUP_SIZE,1,1)]
-void CSScaleSelection (uint3 id : SV_DispatchThreadID)
+void CSScaleSelection(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
@@ -511,9 +565,9 @@ void CSScaleSelection (uint3 id : SV_DispatchThreadID)
         uint stride = 12;
         float3 pos = asfloat(_SplatPosMouseDown.Load3(idx * stride));
         pos -= _SelectionCenter;
-        pos = mul(_MatrixObjectToWorld, float4(pos,1)).xyz;
+        pos = mul(_MatrixObjectToWorld, float4(pos, 1)).xyz;
         pos *= _SelectionDelta;
-        pos = mul(_MatrixWorldToObject, float4(pos,1)).xyz;
+        pos = mul(_MatrixWorldToObject, float4(pos, 1)).xyz;
         pos += _SelectionCenter;
         _SplatPos.Store3(idx * stride, asuint(pos));
     }
@@ -524,19 +578,30 @@ struct ExportSplatData
     float3 pos;
     float3 nor;
     float3 dc0;
-    float4 shR14; float4 shR58; float4 shR9C; float3 shRDF;
-    float4 shG14; float4 shG58; float4 shG9C; float3 shGDF;
-    float4 shB14; float4 shB58; float4 shB9C; float3 shBDF;
+    float4 shR14;
+    float4 shR58;
+    float4 shR9C;
+    float3 shRDF;
+    float4 shG14;
+    float4 shG58;
+    float4 shG9C;
+    float3 shGDF;
+    float4 shB14;
+    float4 shB58;
+    float4 shB9C;
+    float3 shBDF;
     float opacity;
     float3 scale;
     float4 rot;
 };
+
 RWStructuredBuffer<ExportSplatData> _ExportBuffer;
 
 float3 ColorToSH0(float3 col)
 {
     return (col - 0.5) / 0.2820948;
 }
+
 float InvSigmoid(float v)
 {
     return log(v / max(1 - v, 1.0e-6));
@@ -613,7 +678,7 @@ float3 _ExportTransformScale;
 uint _ExportTransformFlags;
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSExportData (uint3 id : SV_DispatchThreadID)
+void CSExportData(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _SplatCount)
@@ -625,7 +690,7 @@ void CSExportData (uint3 id : SV_DispatchThreadID)
     // transform splat by matrix, if needed
     if (_ExportTransformFlags != 0)
     {
-        src.pos = mul(_MatrixObjectToWorld, float4(src.pos,1)).xyz;
+        src.pos = mul(_MatrixObjectToWorld, float4(src.pos, 1)).xyz;
 
         // note: this only handles axis flips from scale, not any arbitrary scaling
         if (_ExportTransformScale.x < 0)
@@ -645,29 +710,29 @@ void CSExportData (uint3 id : SV_DispatchThreadID)
     dst.pos = src.pos;
     dst.nor = 0;
     dst.dc0 = ColorToSH0(src.sh.col);
-    
+
     dst.shR14 = float4(src.sh.sh1.r, src.sh.sh2.r, src.sh.sh3.r, src.sh.sh4.r);
     dst.shR58 = float4(src.sh.sh5.r, src.sh.sh6.r, src.sh.sh7.r, src.sh.sh8.r);
     dst.shR9C = float4(src.sh.sh9.r, src.sh.sh10.r, src.sh.sh11.r, src.sh.sh12.r);
     dst.shRDF = float3(src.sh.sh13.r, src.sh.sh14.r, src.sh.sh15.r);
-    
+
     dst.shG14 = float4(src.sh.sh1.g, src.sh.sh2.g, src.sh.sh3.g, src.sh.sh4.g);
     dst.shG58 = float4(src.sh.sh5.g, src.sh.sh6.g, src.sh.sh7.g, src.sh.sh8.g);
     dst.shG9C = float4(src.sh.sh9.g, src.sh.sh10.g, src.sh.sh11.g, src.sh.sh12.g);
     dst.shGDF = float3(src.sh.sh13.g, src.sh.sh14.g, src.sh.sh15.g);
-    
+
     dst.shB14 = float4(src.sh.sh1.b, src.sh.sh2.b, src.sh.sh3.b, src.sh.sh4.b);
     dst.shB58 = float4(src.sh.sh5.b, src.sh.sh6.b, src.sh.sh7.b, src.sh.sh8.b);
     dst.shB9C = float4(src.sh.sh9.b, src.sh.sh10.b, src.sh.sh11.b, src.sh.sh12.b);
     dst.shBDF = float3(src.sh.sh13.b, src.sh.sh14.b, src.sh.sh15.b);
-    
+
     dst.opacity = InvSigmoid(src.opacity);
     dst.scale = log(src.scale);
     dst.rot = src.rot.wxyz;
 
     if (isCut)
         dst.nor = 1; // mark as skipped for export
-    
+
     _ExportBuffer[idx] = dst;
 }
 
@@ -683,7 +748,7 @@ float4 _CopyTransformRotation;
 float3 _CopyTransformScale;
 
 [numthreads(GROUP_SIZE,1,1)]
-void CSCopySplats (uint3 id : SV_DispatchThreadID)
+void CSCopySplats(uint3 id : SV_DispatchThreadID)
 {
     uint idx = id.x;
     if (idx >= _CopyCount)
@@ -696,7 +761,7 @@ void CSCopySplats (uint3 id : SV_DispatchThreadID)
     SplatData src = LoadSplatData(idx);
 
     // transform the splat
-    src.pos = mul(_CopyTransformMatrix, float4(src.pos,1)).xyz;
+    src.pos = mul(_CopyTransformMatrix, float4(src.pos, 1)).xyz;
     // note: this only handles axis flips from scale, not any arbitrary scaling
     if (_CopyTransformScale.x < 0)
         src.rot.yz = -src.rot.yz;
@@ -718,10 +783,10 @@ void CSCopySplats (uint3 id : SV_DispatchThreadID)
     uint otherStride = 4 + 12;
     uint rotVal = EncodeQuatToNorm10(PackSmallest3Rotation(src.rot));
     _CopyDstOther.Store4(dstIdx * otherStride, uint4(
-        rotVal,
-        asuint(src.scale.x),
-        asuint(src.scale.y),
-        asuint(src.scale.z)));
+                             rotVal,
+                             asuint(src.scale.x),
+                             asuint(src.scale.y),
+                             asuint(src.scale.z)));
     // color
     uint3 pixelIndex = SplatIndexToPixelIndex(dstIdx);
     _CopyDstColor[pixelIndex.xy] = float4(src.sh.col, src.opacity);

@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 33b71fae31e6c7d438e8566dc713e666, type: 3}
+  m_Name: LegoDarthMaulTT_cropped_v1
+  m_EditorClassIdentifier: 
+  m_FormatVersion: 20231020
+  m_SplatCount: 105152
+  m_BoundsMin: {x: -3.2263212, y: -5.139977, z: -2.8401337}
+  m_BoundsMax: {x: 2.991027, y: 0.3678078, z: 2.5195324}
+  m_DataHash:
+    serializedVersion: 2
+    Hash: 5c4f57b87694cad4690711e866f31160
+  m_PosFormat: 1
+  m_ScaleFormat: 1
+  m_SHFormat: 2
+  m_ColorFormat: 1
+  m_PosData: {fileID: 4900000, guid: b952dae768d9f4db8bdaa1e226d1600c, type: 3}
+  m_ColorData: {fileID: 4900000, guid: 5f3f0b5d03b69489688b561caf4f5fe0, type: 3}
+  m_OtherData: {fileID: 4900000, guid: 3ea787754a82e45a08c781a3a5a134d4, type: 3}
+  m_SHData: {fileID: 4900000, guid: c1725b9382dae44bba51a9e183e2de8f, type: 3}
+  m_ChunkData: {fileID: 4900000, guid: 0463ed4eeb4b141d3be6a9d9c5477b69, type: 3}
+  m_Cameras: []

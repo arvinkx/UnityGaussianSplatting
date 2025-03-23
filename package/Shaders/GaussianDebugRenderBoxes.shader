@@ -3,100 +3,120 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
 {
     SubShader
     {
-        Tags { "RenderType"="Transparent" "Queue"="Transparent" }
+        Tags
+        {
+            "RenderType"="Transparent" "Queue"="Transparent"
+        }
 
         Pass
         {
-            ZWrite Off
+            ZWrite On
+            ZTest LEqual
             Blend OneMinusDstAlpha One
             Cull Front
 
-CGPROGRAM
-#pragma vertex vert
-#pragma fragment frag
-#pragma require compute
-#pragma use_dxc
+            HLSLPROGRAM
+            #pragma vertex vert
+            #pragma fragment frag
+            #pragma require compute
+            #pragma multi_compile_instancing
 
-#include "UnityCG.cginc"
-#include "GaussianSplatting.hlsl"
+            #pragma shader_feature UNITY_STEREO_INSTANCING_ENABLED
 
-StructuredBuffer<uint> _OrderBuffer;
+            #include "GaussianSplatting.hlsl"
+            #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
+            #include_with_pragmas "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRenderingKeywords.hlsl"
+            #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRendering.hlsl"
+            #include "HLSLSupport.cginc"
 
-bool _DisplayChunks;
+            StructuredBuffer<uint> _OrderBuffer;
 
-struct v2f
-{
-    half4 col : COLOR0;
-    float4 vertex : SV_POSITION;
-};
+            bool _DisplayChunks;
 
-float _SplatScale;
-float _SplatOpacityScale;
+            struct appdata
+            {
+                uint vtxID : SV_VertexID;
+                #ifdef UNITY_STEREO_INSTANCING_ENABLED
+                UNITY_VERTEX_INPUT_INSTANCE_ID
+                #else
+                uint instanceID : SV_InstanceID;
+                #endif
+            };
 
-// based on https://iquilezles.org/articles/palettes/
-// cosine based palette, 4 vec3 params
-half3 palette(float t, half3 a, half3 b, half3 c, half3 d)
-{
-    return a + b*cos(6.28318*(c*t+d));
-}
+            struct v2f
+            {
+                half4 col : COLOR0;
+                float4 vertex : SV_POSITION;
+            };
 
-v2f vert (uint vtxID : SV_VertexID, uint instID : SV_InstanceID)
-{
-    v2f o;
-    bool chunks = _DisplayChunks;
-	uint idx = vtxID;
-	float3 localPos = float3(idx&1, (idx>>1)&1, (idx>>2)&1) * 2.0 - 1.0;
+            float _SplatScale;
+            float _SplatOpacityScale;
 
-    float3 centerWorldPos = 0;
+            // based on https://iquilezles.org/articles/palettes/
+            // cosine based palette, 4 vec3 params
+            half3 palette(float t, half3 a, half3 b, half3 c, half3 d)
+            {
+                return a + b * cos(6.28318 * (c * t + d));
+            }
 
-    if (!chunks)
-    {
-        // display splat boxes
-        instID = _OrderBuffer[instID];
-        SplatData splat = LoadSplatData(instID);
+            v2f vert(appdata v)
+            {
+                v2f o;
+                bool chunks = _DisplayChunks;
+                uint idx = v.vtxID;
+                float3 localPos = float3(idx & 1, (idx >> 1) & 1, (idx >> 2) & 1) * 2.0 - 1.0;
 
-        float4 boxRot = splat.rot;
-        float3 boxSize = splat.scale;
-        boxSize *= _SplatScale;
+                float3 centerWorldPos = 0;
+                uint instID = v.instanceID;
 
-        float3x3 splatRotScaleMat = CalcMatrixFromRotationScale(boxRot, boxSize);
-        splatRotScaleMat = mul((float3x3)unity_ObjectToWorld, splatRotScaleMat);
+                if (!chunks)
+                {
+                    // display splat boxes
+                    instID = _OrderBuffer[instID];
+                    SplatData splat = LoadSplatData(instID);
 
-        centerWorldPos = splat.pos;
-        centerWorldPos = mul(unity_ObjectToWorld, float4(centerWorldPos,1)).xyz;
+                    float4 boxRot = splat.rot;
+                    float3 boxSize = splat.scale;
+                    boxSize *= _SplatScale;
 
-        o.col.rgb = saturate(splat.sh.col);
-        o.col.a = saturate(splat.opacity * _SplatOpacityScale);
+                    float3x3 splatRotScaleMat = CalcMatrixFromRotationScale(boxRot, boxSize);
+                    splatRotScaleMat = mul((float3x3)unity_ObjectToWorld, splatRotScaleMat);
 
-        localPos = mul(splatRotScaleMat, localPos) * 2;
-    }
-    else
-    {
-        // display chunk boxes
-        localPos = localPos * 0.5 + 0.5;
-        SplatChunkInfo chunk = _SplatChunks[instID];
-        float3 posMin = float3(chunk.posX.x, chunk.posY.x, chunk.posZ.x);
-        float3 posMax = float3(chunk.posX.y, chunk.posY.y, chunk.posZ.y);
+                    centerWorldPos = splat.pos;
+                    centerWorldPos = mul(unity_ObjectToWorld, float4(centerWorldPos, 1)).xyz;
 
-        localPos = lerp(posMin, posMax, localPos);
-        localPos = mul(unity_ObjectToWorld, float4(localPos,1)).xyz;
+                    o.col.rgb = saturate(splat.sh.col);
+                    o.col.a = saturate(splat.opacity * _SplatOpacityScale);
 
-        o.col.rgb = palette((float)instID / (float)_SplatChunkCount, half3(0.5,0.5,0.5), half3(0.5,0.5,0.5), half3(1,1,1), half3(0.0, 0.33, 0.67));
-        o.col.a = 0.1;
-    }
+                    localPos = mul(splatRotScaleMat, localPos) * 2;
+                }
+                else
+                {
+                    // display chunk boxes
+                    localPos = localPos * 0.5 + 0.5;
+                    SplatChunkInfo chunk = _SplatChunks[instID];
+                    float3 posMin = float3(chunk.posX.x, chunk.posY.x, chunk.posZ.x);
+                    float3 posMax = float3(chunk.posX.y, chunk.posY.y, chunk.posZ.y);
 
-    float3 worldPos = centerWorldPos + localPos;
-    o.vertex = UnityWorldToClipPos(worldPos);
-    FlipProjectionIfBackbuffer(o.vertex);
-    return o;
-}
+                    localPos = lerp(posMin, posMax, localPos);
+                    localPos = mul(unity_ObjectToWorld, float4(localPos, 1)).xyz;
 
-half4 frag (v2f i) : SV_Target
-{
-    half4 res = half4(i.col.rgb * i.col.a, i.col.a);
-    return res;
-}
-ENDCG
+                    o.col.rgb = palette((float)instID / (float)_SplatChunkCount, half3(0.5, 0.5, 0.5),
+                                        half3(0.5, 0.5, 0.5), half3(1, 1, 1), half3(0.0, 0.33, 0.67));
+                    o.col.a = 0.1;
+                }
+
+                float3 worldPos = centerWorldPos + localPos;
+                o.vertex = mul(UNITY_MATRIX_VP, mul(unity_ObjectToWorld, float4(worldPos, 1.0)));
+                FlipProjectionIfBackbuffer(o.vertex);
+                return o;
+            }
+
+            half4 frag(v2f i) : SV_Target
+            {
+                return half4(i.col.rgb * i.col.a, i.col.a);
+            }
+            ENDHLSL
         }
     }
 }

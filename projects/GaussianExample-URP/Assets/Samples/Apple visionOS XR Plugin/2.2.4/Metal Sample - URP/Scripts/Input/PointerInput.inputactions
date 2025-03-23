@@ -1,0 +1,60 @@
+{
+    "name": "PointerInput",
+    "maps": [
+        {
+            "name": "Default",
+            "id": "d9c85186-69e8-4a3a-a161-3d4c6cc1e4fa",
+            "actions": [
+                {
+                    "name": "PrimaryPointer",
+                    "type": "PassThrough",
+                    "id": "137f651a-c48c-4d8a-931a-e34a275627bc",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                },
+                {
+                    "name": "SecondaryPointer",
+                    "type": "PassThrough",
+                    "id": "12f09dd3-e61e-424c-93ce-24e8eedab693",
+                    "expectedControlType": "",
+                    "processors": "",
+                    "interactions": "",
+                    "initialStateCheck": false
+                }
+            ],
+            "bindings": [
+                {
+                    "name": "",
+                    "id": "6beadd1e-fbe7-42ca-9fcf-b2fedcf81cc7",
+                    "path": "<VisionOSSpatialPointerDevice>/spatialPointer0",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Default",
+                    "action": "PrimaryPointer",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                },
+                {
+                    "name": "",
+                    "id": "835e359b-e497-4e97-84ee-91d9c5a52265",
+                    "path": "<VisionOSSpatialPointerDevice>/spatialPointer1",
+                    "interactions": "",
+                    "processors": "",
+                    "groups": "Default",
+                    "action": "SecondaryPointer",
+                    "isComposite": false,
+                    "isPartOfComposite": false
+                }
+            ]
+        }
+    ],
+    "controlSchemes": [
+        {
+            "name": "Default",
+            "bindingGroup": "Default",
+            "devices": []
+        }
+    ]
+}

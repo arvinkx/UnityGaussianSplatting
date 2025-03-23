@@ -4,5 +4,12 @@
 EditorBuildSettings:
   m_ObjectHideFlags: 0
   serializedVersion: 2
-  m_Scenes: []
-  m_configObjects: {}
+  m_Scenes:
+  - enabled: 1
+    path: Assets/GSTestScene.unity
+    guid: 36934c1e75cb24745a91b0a1124a3179
+  m_configObjects:
+    UnityEditor.XR.VisionOS.VisionOSSettings: {fileID: 11400000, guid: ff6db4c962f9948bc94583fb4c44ced8, type: 2}
+    com.unity.xr.arfoundation.simulation_settings: {fileID: 11400000, guid: 012000c6ec7624563a287b67e7efac19, type: 2}
+    com.unity.xr.management.loader_settings: {fileID: 11400000, guid: d36e1cd3395b24727b0803943acb52f2, type: 2}
+  m_UseUCBPForAssetBundles: 0
