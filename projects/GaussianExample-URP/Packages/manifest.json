@@ -4,6 +4,7 @@
     "com.unity.render-pipelines.universal": "17.0.4",
     "com.unity.xr.interaction.toolkit": "3.0.7",
     "com.unity.xr.management": "4.5.0",
+    "com.unity.xr.mock-hmd": "1.4.0-preview.2",
     "com.unity.xr.visionos": "2.2.4",
     "org.nesnausk.gaussian-splatting": "file:../../../package",
     "com.unity.modules.accessibility": "1.0.0",

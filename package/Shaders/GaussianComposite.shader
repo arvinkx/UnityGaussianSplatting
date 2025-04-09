@@ -2,12 +2,10 @@ Shader "Hidden/Gaussian Splatting/Composite"
 {
    SubShader
    {
-      Tags { "RenderType" = "Opaque" }
-
       Pass
       {
          ZWrite Off
-         ZTest Off
+         ZTest Always
          Cull Off
          Blend SrcAlpha OneMinusSrcAlpha
     

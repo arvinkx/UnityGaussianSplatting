@@ -108,6 +108,7 @@ namespace GaussianSplatting.Runtime
                     !cs.IsSupported(m_kernelScan) ||
                     !cs.IsSupported(m_kernelDownsweep))
                 {
+                    Debug.LogError("Radix sort compute shader is not supported on this platform");
                     m_Valid = false;
                 }
             }

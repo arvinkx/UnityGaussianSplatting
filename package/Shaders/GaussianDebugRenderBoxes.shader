@@ -10,7 +10,7 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
 
         Pass
         {
-            ZWrite On
+            ZWrite Off
             ZTest LEqual
             Blend OneMinusDstAlpha One
             Cull Front
@@ -29,7 +29,8 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
             #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/FoveatedRendering.hlsl"
             #include "HLSLSupport.cginc"
 
-            StructuredBuffer<uint> _OrderBuffer;
+            StructuredBuffer<uint> _OrderBufferL;
+            StructuredBuffer<uint> _OrderBufferR;
 
             bool _DisplayChunks;
 
@@ -47,6 +48,13 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
             {
                 half4 col : COLOR0;
                 float4 vertex : SV_POSITION;
+                UNITY_VERTEX_OUTPUT_STEREO
+            };
+
+            struct fragOut
+            {
+                half4 color : SV_Target;
+                float depth : SV_Depth;
             };
 
             float _SplatScale;
@@ -62,6 +70,11 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
             v2f vert(appdata v)
             {
                 v2f o;
+                #ifdef UNITY_STEREO_INSTANCING_ENABLED
+                UNITY_SETUP_INSTANCE_ID(v);
+                UNITY_INITIALIZE_OUTPUT(v2f, o);
+                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                #endif
                 bool chunks = _DisplayChunks;
                 uint idx = v.vtxID;
                 float3 localPos = float3(idx & 1, (idx >> 1) & 1, (idx >> 2) & 1) * 2.0 - 1.0;
@@ -72,7 +85,14 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
                 if (!chunks)
                 {
                     // display splat boxes
-                    instID = _OrderBuffer[instID];
+                    if (unity_StereoEyeIndex == 0)
+                    {
+                        instID = _OrderBufferL[instID];    
+                    } else
+                    {
+                        instID = _OrderBufferR[instID];
+                    }
+                    
                     SplatData splat = LoadSplatData(instID);
 
                     float4 boxRot = splat.rot;
@@ -107,13 +127,17 @@ Shader "Gaussian Splatting/Debug/Render Boxes"
                 }
 
                 float3 worldPos = centerWorldPos + localPos;
-                o.vertex = mul(UNITY_MATRIX_VP, mul(unity_ObjectToWorld, float4(worldPos, 1.0)));
+                o.vertex = mul(UNITY_MATRIX_VP, float4(worldPos, 1.0));
                 FlipProjectionIfBackbuffer(o.vertex);
                 return o;
             }
 
             half4 frag(v2f i) : SV_Target
             {
+                // fragOut o;
+                // o.color = half4(i.col.rgb * i.col.a, i.col.a);
+                // o.depth = 0;//i.vertex.z * i.col.a;
+                // return o;
                 return half4(i.col.rgb * i.col.a, i.col.a);
             }
             ENDHLSL

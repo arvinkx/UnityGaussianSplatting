@@ -17,7 +17,7 @@ MonoBehaviour:
   m_WorldSensingUsageDescription: Used to facilitate AR
   m_RuntimeSettings: {fileID: 11400000, guid: 038ebf27f556f441b82f5278735f0bd3, type: 2}
   m_UpperLimbVisibility: 0
-  m_FoveatedRendering: 0
+  m_FoveatedRendering: 1
   m_MetalImmersionStyle: 0
   m_RealityKitImmersionStyle: 0
   m_MetalImmersiveOverlays: 0

@@ -326,7 +326,15 @@ inline void WarpLevelMultiSplitWGE16(uint key, inout uint4 waveFlags)
         if(t)
             waveFlags &= ballot;
         else
-            waveFlags &= (~ballot);
+        {
+            uint4 notBallot;
+            notBallot.x = ~ballot.x;
+            notBallot.y = ~ballot.y;
+            notBallot.z = ~ballot.z;
+            notBallot.w = ~ballot.w;
+
+            waveFlags &= notBallot;
+        }
     }
 }
 

@@ -29,6 +29,7 @@ namespace GaussianSplatting.Runtime
         private static readonly int SGaussianSplatArrayRT = Shader.PropertyToID(GaussianSplatRTArrayName);
 
         public static Material compositeMaterial;
+        
 
         private bool _mHasCamera;
 
@@ -37,11 +38,14 @@ namespace GaussianSplatting.Runtime
             private class PassData
             {
                 internal UniversalCameraData CameraData;
+                internal Camera Camera;
                 internal TextureHandle SourceTexture;
                 internal TextureHandle SourceDepth;
                 internal TextureHandle GaussianSplatRT;
                 internal TextureHandle GaussianSplatDepthRT;
             }
+            
+            private Camera _mCamera; // Workaround for bug in Unity 6.0.0a1 where Camera.main StereoViewMatrices incorrect
             
             public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
             {
@@ -59,16 +63,24 @@ namespace GaussianSplatting.Runtime
                 using var builder = renderGraph.AddUnsafePass<PassData>(RenderProfilerTag, out var passData);
                 var resourceData = frameData.Get<UniversalResourceData>();
                 var cameraData = frameData.Get<UniversalCameraData>();
-                passData.CameraData = cameraData;
+                if (_mCamera == null)
+                {
+                    _mCamera = Camera.main; 
+                }
+
+                passData.CameraData = cameraData; // Needed for foveated rendering
+                passData.Camera = _mCamera;
                 
                 var rtDesc = cameraData.cameraTargetDescriptor;
                 rtDesc.depthBufferBits = 0;
-                
                 var textureHandle =
                     UniversalRenderer.CreateRenderGraphTexture(renderGraph, rtDesc, GaussianSplatRTName, true);
                 passData.GaussianSplatRT = textureHandle;
                 passData.SourceDepth = resourceData.activeDepthTexture;
+                passData.SourceTexture = resourceData.activeColorTexture;
                 builder.UseTexture(passData.GaussianSplatRT, AccessFlags.Write);
+                // Used to test only the draw stage
+                //builder.UseTexture(passData.SourceTexture, AccessFlags.Write); 
                 builder.UseTexture(resourceData.activeDepthTexture, AccessFlags.Write);
                 builder.AllowPassCulling(false);
                 builder.SetGlobalTextureAfterPass(
@@ -84,9 +96,18 @@ namespace GaussianSplatting.Runtime
             {
                 var commandBuffer = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
                 using var _ = new ProfilingScope(commandBuffer, SRenderProfilingSampler);
-                commandBuffer.SetRenderTarget(data.GaussianSplatRT, 0, CubemapFace.Unknown, -1);
+                commandBuffer.SetRenderTarget(data.GaussianSplatRT, data.SourceDepth, 0, CubemapFace.Unknown, -1);
+                if (data.CameraData.xr.supportsFoveatedRendering)
+                {
+                    commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Enabled);
+                }
                 compositeMaterial =
-                    GaussianSplatRenderSystem.instance.SortAndRenderSplats(data.CameraData.camera, commandBuffer);
+                    GaussianSplatRenderSystem.instance.SortAndRenderSplats(data.Camera, commandBuffer);
+                // Disable foveated rendering for composite pass
+                if (data.CameraData.xr.supportsFoveatedRendering)
+                {
+                    commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Disabled);
+                }
             }
 
             /// <summary>
