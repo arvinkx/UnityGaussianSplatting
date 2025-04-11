@@ -470,13 +470,13 @@ namespace GaussianSplatting.Runtime
             {
                 stereoViewMatrices[0] = cam.GetStereoViewMatrix(Camera.StereoscopicEye.Left);
                 stereoViewMatrices[1] = cam.GetStereoViewMatrix(Camera.StereoscopicEye.Right);
-                stereoProjMatrices[0] = cam.GetStereoProjectionMatrix(Camera.StereoscopicEye.Left);
-                stereoProjMatrices[1] = cam.GetStereoProjectionMatrix(Camera.StereoscopicEye.Right);
+                stereoProjMatrices[0] = GL.GetGPUProjectionMatrix(cam.GetStereoProjectionMatrix(Camera.StereoscopicEye.Left), true);
+                stereoProjMatrices[1] = GL.GetGPUProjectionMatrix(cam.GetStereoProjectionMatrix(Camera.StereoscopicEye.Right), true);
             }
             else
             {
                 stereoViewMatrices[0] = cam.worldToCameraMatrix;
-                stereoProjMatrices[0] = cam.projectionMatrix;
+                stereoProjMatrices[0] = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
             }
 
             // Debug buffer
@@ -495,11 +495,9 @@ namespace GaussianSplatting.Runtime
             cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcViewData, Props.MatrixStereoProj,
                 _ProjMatrixBuffer);
             
-            Matrix4x4 matView = cam.worldToCameraMatrix;
             int screenW = cam.pixelWidth, screenH = cam.pixelHeight;
             int eyeW = XRSettings.eyeTextureWidth, eyeH = XRSettings.eyeTextureHeight;
-
-            // Correct screen size calculation for visionOS
+            
             if (XRSettings.enabled && eyeW != 0 && eyeH != 0)
             {
                 screenW = eyeW;
@@ -508,13 +506,9 @@ namespace GaussianSplatting.Runtime
 
             Vector4 screenPar = new Vector4(screenW, screenH, 0, 0); // Use the calculated screen size
             Vector4 camPos = cam.transform.position;
-
-            // calculate view dependent data for each splat
+            
             SetAssetDataOnCS(cmb, KernelIndices.CalcViewData);
-
-            //cmb.SetComputeMatrixParam(m_CSSplatUtilities, "_MatrixVP", cam.projectionMatrix * matView);
-            //cmb.SetComputeMatrixParam(m_CSSplatUtilities, "_MatrixP", cam.projectionMatrix);
-            cmb.SetComputeMatrixParam(m_CSSplatUtilities, Props.MatrixMV, matView * matO2W);
+            
             cmb.SetComputeMatrixParam(m_CSSplatUtilities, Props.MatrixObjectToWorld, matO2W);
             cmb.SetComputeMatrixParam(m_CSSplatUtilities, Props.MatrixWorldToObject, matW2O);
 
@@ -529,16 +523,6 @@ namespace GaussianSplatting.Runtime
             m_CSSplatUtilities.GetKernelThreadGroupSizes((int)KernelIndices.CalcViewData, out uint gsX, out _, out uint gsZ);
             cmb.DispatchCompute(m_CSSplatUtilities, (int)KernelIndices.CalcViewData,
                 ((m_GpuViewL.count + (int)gsX - 1) / (int)gsX), 1, ((GaussianSplatRenderSystem.NumberOfViews) + (int)gsZ - 1) / (int)gsZ);
-            
-            // Debug results
-            //float[] debugData = new float[m_GpuViewL.count];
-            //SplatViewData[] viewData = new SplatViewData[m_GpuView.count];
-            //float4x4[] viewMatrices = new float4x4[GaussianSplatRenderSystem.NumberOfViews];
-            //_ViewMatrixBuffer.GetData(viewMatrices);
-            //m_GpuView.GetData(viewData);
-            //_DebugBuffer.GetData(debugData);
-            //Debug.Log($"Debug data: {debugData[0]}, {debugData[1]}, {debugData[2]}, {debugData[3]}, {debugData[4]}");
-            //Debug.Log($"View index: pos: {debugData[0]}, {debugData[1]}, {debugData[2]}, color: {debugData[3]}, {debugData[4]}");
         }
 
         internal void SortPoints(CommandBuffer cmd, Camera cam, Matrix4x4 matrix)
@@ -579,7 +563,7 @@ namespace GaussianSplatting.Runtime
             cmd.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcDistances, Props.SplatPos,
                 m_GpuPosData);
             cmd.SetComputeIntParam(m_CSSplatUtilities, Props.SplatFormat, (int)m_Asset.posFormat);
-            //cmd.SetComputeMatrixParam(m_CSSplatUtilities, Props.MatrixMV, worldToCamMatrix * matrix);
+            cmd.SetComputeMatrixParam(m_CSSplatUtilities, Props.MatrixMV, worldToCamMatrix * matrix);
             cmd.SetComputeIntParam(m_CSSplatUtilities, Props.SplatCount, m_SplatCount);
             cmd.SetComputeIntParam(m_CSSplatUtilities, Props.SplatChunkCount, m_GpuChunksValid ? m_GpuChunks.count : 0);
             m_CSSplatUtilities.GetKernelThreadGroupSizes((int)KernelIndices.CalcDistances, out uint gsX, out _, out uint gsZ);

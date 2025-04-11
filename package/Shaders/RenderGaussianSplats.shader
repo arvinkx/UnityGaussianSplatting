@@ -2,7 +2,10 @@ Shader "Gaussian Splatting/Render Splats"
 {
     SubShader
     {
-        Tags { "RenderType"="Transparent" "Queue"="Transparent" }
+        Tags
+        {
+            "RenderType"="Transparent" "Queue"="Transparent"
+        }
 
         Pass
         {
@@ -51,15 +54,15 @@ Shader "Gaussian Splatting/Render Splats"
             StructuredBuffer<SplatViewData> _SplatViewDataR;
             ByteAddressBuffer _SplatSelectedBits;
             uint _SplatBitsValid;
-            
+
             v2f vert(appdata v)
             {
                 v2f o = (v2f)0;
-                
+
                 #ifdef UNITY_STEREO_INSTANCING_ENABLED
-                UNITY_SETUP_INSTANCE_ID(v);
-                UNITY_INITIALIZE_OUTPUT(v2f, o);
-                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                    UNITY_SETUP_INSTANCE_ID(v);
+                    UNITY_INITIALIZE_OUTPUT(v2f, o);
+                    UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
                 #endif
                 uint splatIndex;
                 SplatViewData view;
@@ -73,11 +76,9 @@ Shader "Gaussian Splatting/Render Splats"
                     splatIndex = _OrderBufferR[v.instanceID];
                     view = _SplatViewDataR[splatIndex];
                 }
-                
-                o.vertex = view.pos;
-                
-                bool behindCam = o.vertex.w <= 0;
-                
+
+                float4 centerClipPos = view.pos;
+                bool behindCam = centerClipPos.w <= 0;
                 if (behindCam)
                 {
                     o.vertex = asfloat(0x7fc00000); // NaN discards the primitive
@@ -88,20 +89,22 @@ Shader "Gaussian Splatting/Render Splats"
                     o.col.g = f16tof32(view.color.x);
                     o.col.b = f16tof32(view.color.y >> 16);
                     o.col.a = f16tof32(view.color.y);
-            
+
                     uint idx = v.vertexID;
-                    o.pos = float2(idx&1, (idx>>1)&1) * 2.0 - 1.0;
-		            o.pos *= 2;
-                    
-		            float2 deltaScreenPos = (o.pos.x * view.axis1 + o.pos.y * view.axis2) * 2 / _ScreenParams.xy;
-		            
-		            o.vertex.xy += deltaScreenPos * o.vertex.w;
-                    
+                    float2 quadPos = float2(idx & 1, (idx >> 1) & 1) * 2.0 - 1.0;
+                    quadPos *= 2;
+
+                    o.pos = quadPos;
+
+                    float2 deltaScreenPos = (quadPos.x * view.axis1 + quadPos.y * view.axis2) * 2 / _ScreenParams.xy;
+                    o.vertex = centerClipPos;
+                    o.vertex.xy += deltaScreenPos * centerClipPos.w;
+
                     // is this splat selected?
                     if (_SplatBitsValid)
                     {
-                        uint wordIdx = splatIndex / 32;
-                        uint bitIdx = splatIndex & 31;
+                        uint wordIdx = v.instanceID / 32;
+                        uint bitIdx = v.instanceID & 31;
                         uint selVal = _SplatSelectedBits.Load(wordIdx * 4);
                         if (selVal & (1 << bitIdx))
                         {
@@ -109,7 +112,6 @@ Shader "Gaussian Splatting/Render Splats"
                         }
                     }
                 }
-                o.vertex.y = -o.vertex.y; // TODO: why is this needed?
                 FlipProjectionIfBackbuffer(o.vertex);
                 return o;
             }
@@ -119,7 +121,7 @@ Shader "Gaussian Splatting/Render Splats"
             {
                 float power = -dot(i.pos, i.pos);
                 half alpha = exp(power);
-                
+
                 if (i.col.a >= 0)
                 {
                     alpha = saturate(alpha * i.col.a);
@@ -139,14 +141,13 @@ Shader "Gaussian Splatting/Render Splats"
                     }
                     i.col.rgb = lerp(i.col.rgb, selectedColor, 0.5);
                 }
-                
+
                 if (alpha < 1.0 / 255.0)
                     discard;
-                
+
                 return half4(i.col.rgb * alpha, alpha);
             }
             ENDHLSL
         }
     }
 }
-
