@@ -8,6 +8,7 @@
 #endif
 
 using UnityEngine;
+using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
 using UnityEngine.Rendering.RenderGraphModule;
@@ -49,8 +50,62 @@ namespace GaussianSplatting.Runtime
             
             public override void RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)
             {
-                CreateGaussianSplatPass(renderGraph, frameData);
-                CompositeGaussianSplatPass(renderGraph, frameData);
+                //CreateGaussianSplatPass(renderGraph, frameData);
+                //CompositeGaussianSplatPass(renderGraph, frameData);
+                
+                CreateSingleSplatPass(renderGraph, frameData);
+            }
+            private void CreateSingleSplatPass(RenderGraph renderGraph, ContextContainer frameData)
+            {
+                using var builder = renderGraph.AddUnsafePass<PassData>(RenderProfilerTag, out var passData);
+                var resourceData = frameData.Get<UniversalResourceData>();
+                var cameraData = frameData.Get<UniversalCameraData>();
+                if (_mCamera == null)
+                {
+                    _mCamera = Camera.main; 
+                }
+
+                passData.CameraData = cameraData; // Needed for foveated rendering
+                passData.Camera = _mCamera;
+                
+                var rtDesc = cameraData.cameraTargetDescriptor;
+                rtDesc.graphicsFormat = GraphicsFormat.R16G16B16A16_SFloat;
+                rtDesc.depthBufferBits = 0;
+                var textureHandle =
+                    UniversalRenderer.CreateRenderGraphTexture(renderGraph, rtDesc, GaussianSplatRTName, true);
+                passData.GaussianSplatRT = textureHandle;
+                passData.SourceDepth = resourceData.activeDepthTexture;
+                passData.SourceTexture = resourceData.activeColorTexture;
+                builder.UseTexture(passData.GaussianSplatRT, AccessFlags.ReadWrite);
+                builder.UseTexture(passData.SourceTexture, AccessFlags.Write); 
+                builder.UseTexture(resourceData.activeDepthTexture, AccessFlags.Write);
+                builder.AllowPassCulling(false);
+                builder.SetRenderFunc((PassData data, 
+                    UnsafeGraphContext context) => ExecuteRenderPass(data, context));
+            }
+            static void ExecuteRenderPass(PassData data, UnsafeGraphContext context)
+            {
+                var commandBuffer = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
+                using var renderProfile = new ProfilingScope(commandBuffer, SRenderProfilingSampler);
+                commandBuffer.SetRenderTarget(data.GaussianSplatRT, data.SourceDepth, 0, CubemapFace.Unknown, -1);
+                if (data.CameraData.xr.supportsFoveatedRendering)
+                {
+                    commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Enabled);
+                }
+                compositeMaterial =
+                    GaussianSplatRenderSystem.instance.SortAndRenderSplats(data.Camera, commandBuffer);
+                // Disable foveated rendering for composite pass
+                if (data.CameraData.xr.supportsFoveatedRendering)
+                {
+                    commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Disabled);
+                }
+                using var _ = new ProfilingScope(commandBuffer, SCompositeProfilingSampler);
+                commandBuffer.SetRenderTarget(data.SourceTexture, data.SourceDepth, 0, CubemapFace.Unknown, -1);
+                compositeMaterial.SetTexture(SGaussianSplatRT, data.GaussianSplatRT);
+                compositeMaterial.SetTexture(SGaussianSplatArrayRT, data.GaussianSplatRT);
+                commandBuffer.BeginSample(GaussianSplatRenderSystem.s_ProfCompose);
+                commandBuffer.DrawProcedural(Matrix4x4.identity, compositeMaterial, 0, MeshTopology.Triangles, 6, 1);
+                commandBuffer.EndSample(GaussianSplatRenderSystem.s_ProfCompose);
             }
             // <summary>
             /// Creates a Gaussian Splat pass in the render graph.
@@ -92,23 +147,23 @@ namespace GaussianSplatting.Runtime
                     UnsafeGraphContext context) => ExecuteRenderPass(data, context));
             }
             
-            static void ExecuteRenderPass(PassData data, UnsafeGraphContext context)
-            {
-                var commandBuffer = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
-                using var _ = new ProfilingScope(commandBuffer, SRenderProfilingSampler);
-                commandBuffer.SetRenderTarget(data.GaussianSplatRT, data.SourceDepth, 0, CubemapFace.Unknown, -1);
-                if (data.CameraData.xr.supportsFoveatedRendering)
-                {
-                    commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Enabled);
-                }
-                compositeMaterial =
-                    GaussianSplatRenderSystem.instance.SortAndRenderSplats(data.Camera, commandBuffer);
-                // Disable foveated rendering for composite pass
-                if (data.CameraData.xr.supportsFoveatedRendering)
-                {
-                    commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Disabled);
-                }
-            }
+            // static void ExecuteRenderPass(PassData data, UnsafeGraphContext context)
+            // {
+            //     var commandBuffer = CommandBufferHelpers.GetNativeCommandBuffer(context.cmd);
+            //     using var _ = new ProfilingScope(commandBuffer, SRenderProfilingSampler);
+            //     commandBuffer.SetRenderTarget(data.GaussianSplatRT, data.SourceDepth, 0, CubemapFace.Unknown, -1);
+            //     if (data.CameraData.xr.supportsFoveatedRendering)
+            //     {
+            //         commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Enabled);
+            //     }
+            //     compositeMaterial =
+            //         GaussianSplatRenderSystem.instance.SortAndRenderSplats(data.Camera, commandBuffer);
+            //     // Disable foveated rendering for composite pass
+            //     if (data.CameraData.xr.supportsFoveatedRendering)
+            //     {
+            //         commandBuffer.SetFoveatedRenderingMode(FoveatedRenderingMode.Disabled);
+            //     }
+            // }
 
             /// <summary>
             /// Creates a composite Gaussian Splat pass in the render graph.

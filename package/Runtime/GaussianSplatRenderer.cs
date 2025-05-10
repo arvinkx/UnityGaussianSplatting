@@ -200,8 +200,6 @@ namespace GaussianSplatting.Runtime
 
         void CreateResourcesForAsset()
         {
-            //GaussianSplatRenderSystem.SetNumberOfViews(XRSettings.stereoRenderingMode == XRSettings.StereoRenderingMode.SinglePassInstanced || Application.isPlaying ? 2 : 1);
-            Debug.Log("Set number of views in create: " + GaussianSplatRenderSystem.NumberOfViews);
             if (!HasValidAsset)
                 return;
             m_SplatCount = asset.splatCount;
@@ -450,9 +448,7 @@ namespace GaussianSplatting.Runtime
             DestroyImmediate(m_MatDebugPoints);
             DestroyImmediate(m_MatDebugBoxes);
         }
-
-        //private ComputeBuffer _DebugBuffer;
-
+        
         internal void CalcViewData(CommandBuffer cmb, Camera cam)
         {
             if (cam.cameraType == CameraType.Preview)
@@ -478,18 +474,10 @@ namespace GaussianSplatting.Runtime
                 stereoViewMatrices[0] = cam.worldToCameraMatrix;
                 stereoProjMatrices[0] = GL.GetGPUProjectionMatrix(cam.projectionMatrix, true);
             }
-
-            // Debug buffer
-            // if (_DebugBuffer == null || !_DebugBuffer.IsValid() || _DebugBuffer.count != m_GpuViewL.count)
-            // {
-            //     _DebugBuffer?.Release();
-            //     _DebugBuffer = new ComputeBuffer(m_GpuViewL.count, sizeof(float));
-            // }
             
             _ViewMatrixBuffer.SetData(stereoViewMatrices);
             _ProjMatrixBuffer.SetData(stereoProjMatrices);
-            //cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcViewData, "_DebugBuffer",
-            //    _DebugBuffer);
+
             cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcViewData, Props.MatrixStereoView,
                 _ViewMatrixBuffer);
             cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcViewData, Props.MatrixStereoProj,
@@ -534,19 +522,13 @@ namespace GaussianSplatting.Runtime
             worldToCamMatrix.m20 *= -1;
             worldToCamMatrix.m21 *= -1;
             worldToCamMatrix.m22 *= -1; 
-            //uint[] debugSortKey = new uint[m_GpuSortKeysL.count];
-            //uint[] debugSortDistance = new uint[m_GpuSortDistancesL.count];
             float4x4 leftViewMatrix = cam.GetStereoViewMatrix(Camera.StereoscopicEye.Left);
             float4x4 rightViewMatrix = cam.GetStereoViewMatrix(Camera.StereoscopicEye.Right);
             float4x4[] viewMatrices = new[] { leftViewMatrix, rightViewMatrix };
             _ViewMatrixBuffer.SetData(viewMatrices);
-            //cmb.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcViewData, "_DebugBuffer",
-            //    _DebugBuffer);
             cmd.SetComputeBufferParam(m_CSSplatUtilities, (int)KernelIndices.CalcDistances, Props.MatrixStereoView,
                 _ViewMatrixBuffer);
             
-            //m_GpuSortKeysL.GetData(debugSortKey);
-            //m_GpuSortDistancesL.GetData(debugSortDistance);
             // calculate distance to the camera for each splat
             cmd.BeginSample(s_ProfSort);
             cmd.SetComputeMatrixParam(m_CSSplatUtilities, Props.MatrixObjectToWorld, matrix);
@@ -572,11 +554,8 @@ namespace GaussianSplatting.Runtime
 
             // sort the splats
             EnsureSorterAndRegister();
-            //Debug.Log($"Sorting: {debugSortKey[0]}, distance: {debugSortDistance[0]}, objectWorld: {matrix}");
             m_SorterL.Dispatch(cmd, m_SorterArgsL);
             m_SorterR.Dispatch(cmd, m_SorterArgsR);
-            //m_GpuSortKeysL.GetData(debugSortKey);
-            //m_GpuSortDistancesL.GetData(debugSortDistance);
             cmd.EndSample(s_ProfSort);
         }
 

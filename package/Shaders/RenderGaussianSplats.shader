@@ -63,17 +63,21 @@ Shader "Gaussian Splatting/Render Splats"
                     UNITY_SETUP_INSTANCE_ID(v);
                     UNITY_INITIALIZE_OUTPUT(v2f, o);
                     UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                    uint instID = UNITY_GET_INSTANCE_ID(v);
+                    instID = instID / 2;
+                #else
+                uint instID = v.instanceID;
                 #endif
                 uint splatIndex;
                 SplatViewData view;
                 if (unity_StereoEyeIndex == 0)
                 {
-                    splatIndex = _OrderBufferL[v.instanceID];
+                    splatIndex = _OrderBufferL[instID];
                     view = _SplatViewDataL[splatIndex];
                 }
                 else
                 {
-                    splatIndex = _OrderBufferR[v.instanceID];
+                    splatIndex = _OrderBufferR[instID];
                     view = _SplatViewDataR[splatIndex];
                 }
 
